@@ -3,17 +3,47 @@ import { supabase } from './supabaseClient';
 
 const mapProfileToUser = (profile: any, authUser: any): User => {
   return {
-    id: authUser.id,
-    email: profile.email || authUser.email || '',
+    id: authUser?.id || profile?.id,
+    email: profile.email || authUser?.email || '',
     fullName: profile.full_name || '',
     username: profile.username || '',
     phoneNumber: profile.phone_number || '',
-    isAdmin: profile.is_admin || false, // Pastikan is_admin diambil dari DB
+    isAdmin: profile.is_admin || false,
     isVerified: profile.is_verified || false,
     balance: profile.balance || 0,
     notifications: [], 
     profilePictureUrl: profile.profile_picture_url,
   };
+};
+
+export const register = async (userData: Omit<User, 'id' | 'username' | 'isAdmin' | 'isVerified' | 'balance' | 'notifications' | 'profilePictureUrl'> & { password: string }): Promise<{ user: User | null; error: string | null }> => {
+  try {
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email: userData.email,
+      password: userData.password,
+      options: {
+        data: {
+          full_name: userData.fullName,
+        }
+      }
+    });
+
+    if (authError) return { user: null, error: authError.message };
+    if (!authData.user) return { user: null, error: 'Gagal membuat akun.' };
+
+    // Tunggu sejenak agar trigger SQL selesai membuat record di tabel profiles
+    await new Promise(r => setTimeout(r, 1000));
+
+    const { data: profileData } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', authData.user.id)
+      .single();
+
+    return { user: mapProfileToUser(profileData || {}, authData.user), error: null };
+  } catch (e: any) {
+    return { user: null, error: e.message || 'Terjadi kesalahan sistem.' };
+  }
 };
 
 export const login = async (identifier: string, passwordAttempt: string): Promise<{ user: User | null; error: string | null }> => {
@@ -32,45 +62,7 @@ export const login = async (identifier: string, passwordAttempt: string): Promis
       .eq('id', authData.user.id)
       .single();
 
-    if (profileError) return { user: null, error: 'Profil tidak ditemukan di database.' };
-
-    return { user: mapProfileToUser(profileData, authData.user), error: null };
-  } catch (e: any) {
-    return { user: null, error: e.message };
-  }
-};
-
-export const register = async (userData: Omit<User, 'id' | 'username' | 'isAdmin' | 'isVerified' | 'balance' | 'notifications' | 'profilePictureUrl'> & { password: string }): Promise<{ user: User | null; error: string | null }> => {
-  try {
-    const { data: authData, error: authError } = await supabase.auth.signUp({
-      email: userData.email,
-      password: userData.password,
-    });
-
-    if (authError) return { user: null, error: authError.message };
-    if (!authData.user) return { user: null, error: 'Gagal membuat akun.' };
-
-    const userId = authData.user.id;
-    const username = userData.email.split('@')[0].toLowerCase();
-
-    const { data: profileData, error: profileError } = await supabase
-      .from('profiles')
-      .upsert([
-        {
-          id: userId,
-          email: userData.email,
-          full_name: userData.fullName,
-          username: username,
-          phone_number: userData.phoneNumber,
-          is_admin: false,
-          is_verified: false,
-          balance: 13000000,
-        }
-      ])
-      .select()
-      .single();
-
-    if (profileError) return { user: null, error: 'Autentikasi sukses, tapi profil gagal disimpan.' };
+    if (profileError) return { user: null, error: 'Profil tidak ditemukan. Pastikan email sudah diverifikasi.' };
 
     return { user: mapProfileToUser(profileData, authData.user), error: null };
   } catch (e: any) {
@@ -123,20 +115,13 @@ export const updateUserBalance = async (userId: string, newBalance: number): Pro
 };
 
 export const getAllUsers = async (): Promise<User[]> => {
-  const { data: profiles, error } = await supabase.from('profiles').select('*');
+  const { data: profiles, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .order('created_at', { ascending: false });
+    
   if (error) return [];
-  return profiles.map((p: any) => ({
-    id: p.id,
-    email: p.email || '',
-    fullName: p.full_name,
-    username: p.username,
-    phoneNumber: p.phone_number,
-    isAdmin: p.is_admin,
-    isVerified: p.is_verified,
-    balance: p.balance,
-    notifications: [],
-    profilePictureUrl: p.profile_picture_url
-  }));
+  return profiles.map((p: any) => mapProfileToUser(p, null));
 };
 
 export const updateUserInfo = async (updatedData: Partial<User>): Promise<void> => {
@@ -151,20 +136,41 @@ export const updateUserInfo = async (updatedData: Partial<User>): Promise<void> 
 
 export const adminCreateUser = async (userData: Omit<User, 'id' | 'username' | 'notifications'> & { password: string }): Promise<User | null> => {
   try {
-    const { data: authData, error: authError } = await supabase.auth.signUp({ email: userData.email, password: userData.password });
-    if (authError || !authData.user) return null;
-    const userId = authData.user.id;
-    const { data: profileData } = await supabase.from('profiles').insert([{
-      id: userId,
-      email: userData.email,
-      full_name: userData.fullName,
-      username: userData.email.split('@')[0],
-      phone_number: userData.phoneNumber,
-      is_admin: userData.isAdmin || false,
-      is_verified: userData.isVerified || false,
-      balance: userData.balance || 0,
-    }]).select().single();
+    // 1. Buat user di Auth
+    const { data: authData, error: authError } = await supabase.auth.signUp({ 
+        email: userData.email, 
+        password: userData.password,
+        options: { data: { full_name: userData.fullName } } 
+    });
+    
+    if (authError || !authData.user) throw authError;
+
+    // 2. Tunggu trigger SQL membuat profile (biasanya instan, tapi kita beri jeda sedikit)
+    await new Promise(r => setTimeout(r, 1200));
+
+    // 3. Update data tambahan yang tidak dihandle trigger otomatis (admin, balance, verification)
+    const { data: profileData, error: updateError } = await supabase
+        .from('profiles')
+        .update({ 
+            is_admin: userData.isAdmin || false, 
+            is_verified: userData.isVerified || false, 
+            balance: userData.balance || 0,
+            phone_number: userData.phoneNumber || ''
+        })
+        .eq('id', authData.user.id)
+        .select()
+        .single();
+
+    if (updateError) throw updateError;
+
+    // 4. Kirim notifikasi selamat datang
+    await addUserNotification(authData.user.id, `Akun Anda telah dibuat oleh Administrator. Selamat bergabung!`);
+
     return mapProfileToUser(profileData, authData.user);
-  } catch { return null; }
+  } catch (err) { 
+    console.error("Admin Create User Error:", err);
+    return null; 
+  }
 };
+
 export const verifyEmail = async (email: string) => true;

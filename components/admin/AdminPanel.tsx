@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useTransactions } from '../../context/TransactionContext';
@@ -41,6 +40,7 @@ const AdminPanel: React.FC = () => {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [filteredTransactions, setFilteredTransactions] = useState<Transaction[]>([]);
   const [trxSearch, setTrxSearch] = useState('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Balance Modal State
   const [isBalanceModalOpen, setIsBalanceModalOpen] = useState(false);
@@ -60,6 +60,7 @@ const AdminPanel: React.FC = () => {
     isVerified: true
   });
   const [createError, setCreateError] = useState<string | null>(null);
+  const [createLoading, setCreateLoading] = useState(false);
 
   useEffect(() => {
     setBankList(companyBankInfoList);
@@ -69,7 +70,7 @@ const AdminPanel: React.FC = () => {
     if (user?.isAdmin) {
       loadData();
     }
-  }, [user, getAllUsers, getAllTransactions]);
+  }, [user]);
 
   useEffect(() => {
       if (!trxSearch.trim()) {
@@ -87,6 +88,7 @@ const AdminPanel: React.FC = () => {
   }, [trxSearch, transactions, users]);
 
   const loadData = async () => {
+    setIsRefreshing(true);
     try {
       const fetchedUsers = await getAllUsers();
       setUsers(fetchedUsers);
@@ -94,12 +96,14 @@ const AdminPanel: React.FC = () => {
       setTransactions(fetchedTransactions);
     } catch (error) {
       console.error("Error loading admin data", error);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
   if (!user || !user.isAdmin) {
     return (
-      <div className="container mx-auto text-center text-danger">
+      <div className="container mx-auto text-center text-danger py-10">
         Access Denied: You must be an administrator to view this page.
       </div>
     );
@@ -108,36 +112,45 @@ const AdminPanel: React.FC = () => {
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setCreateError(null);
+    setCreateLoading(true);
 
     if (!createData.fullName || !createData.email || !createData.password) {
         setCreateError("Name, Email, and Password are required.");
+        setCreateLoading(false);
         return;
     }
 
-    const success = await adminCreateUser({
-        fullName: createData.fullName,
-        email: createData.email,
-        phoneNumber: createData.phoneNumber,
-        password: createData.password,
-        balance: parseFloat(createData.balance) || 0,
-        isAdmin: createData.isAdmin,
-        isVerified: createData.isVerified
-    });
-
-    if (success) {
-        setIsCreateModalOpen(false);
-        setCreateData({
-            fullName: '',
-            email: '',
-            phoneNumber: '',
-            password: '',
-            balance: '13000000',
-            isAdmin: false,
-            isVerified: true
+    try {
+        const success = await adminCreateUser({
+            fullName: createData.fullName,
+            email: createData.email,
+            phoneNumber: createData.phoneNumber,
+            password: createData.password,
+            balance: parseFloat(createData.balance) || 0,
+            isAdmin: createData.isAdmin,
+            isVerified: createData.isVerified
         });
-        loadData();
-    } else {
-        setCreateError("Failed to create user. Email might be taken.");
+
+        if (success) {
+            setIsCreateModalOpen(false);
+            setCreateData({
+                fullName: '',
+                email: '',
+                phoneNumber: '',
+                password: '',
+                balance: '13000000',
+                isAdmin: false,
+                isVerified: true
+            });
+            // Re-load users after successful creation
+            await loadData();
+        } else {
+            setCreateError("Failed to create user. Email might be taken or database connection issue.");
+        }
+    } catch (err) {
+        setCreateError("Error during user creation.");
+    } finally {
+        setCreateLoading(false);
     }
   };
 
@@ -219,10 +232,15 @@ const AdminPanel: React.FC = () => {
 
   return (
     <div className="container mx-auto relative font-sans">
-      <h2 className="text-2xl sm:text-3xl font-bold text-white mb-6">Admin Panel</h2>
-      <p className="text-gray-500 mb-8">
-        Manage users, transactions, and company settings.
-      </p>
+      <div className="flex justify-between items-center mb-6">
+        <div>
+            <h2 className="text-2xl sm:text-3xl font-bold text-white mb-1">Admin Panel</h2>
+            <p className="text-gray-500">Manage users, transactions, and company settings.</p>
+        </div>
+        <Button onClick={loadData} variant="ghost" className="flex items-center" isLoading={isRefreshing}>
+             Refresh Data
+        </Button>
+      </div>
 
       <div className="bg-darkblue2 p-6 rounded-lg shadow-md">
         <div className="flex border-b border-gray-700 mb-6 overflow-x-auto">
@@ -255,7 +273,7 @@ const AdminPanel: React.FC = () => {
         {activeTab === 'users' && (
           <div>
             <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-semibold">All Users</h3>
+                <h3 className="text-xl font-semibold">Registered Profiles ({users.length})</h3>
                 <Button variant="primary" size="sm" onClick={() => setIsCreateModalOpen(true)}>
                     <UserPlusIcon className="w-4 h-4 mr-2" />
                     Create New User
@@ -271,14 +289,14 @@ const AdminPanel: React.FC = () => {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Balance</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Verified</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Admin</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Actions</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-800">
                   {users.map((u: User) => (
-                    <tr key={u.id}>
+                    <tr key={u.id} className="hover:bg-white/[0.02] transition-colors">
                       <td className="px-6 py-4 whitespace-nowrap text-xs sm:text-sm text-gray-500 font-sans tabular-nums">{u.id.substring(0,8)}...</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-xs sm:text-sm text-white">{u.fullName}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-xs sm:text-sm text-white font-medium">{u.fullName}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-xs sm:text-sm text-gray-300">{u.email}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-xs sm:text-sm text-white font-sans tabular-nums">Rp {u.balance.toLocaleString('id-ID')}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-xs sm:text-sm">
@@ -297,7 +315,7 @@ const AdminPanel: React.FC = () => {
                                 variant="secondary"
                                 size="sm"
                                 onClick={() => openBalanceModal(u)}
-                                className="bg-blue-600 hover:bg-blue-500 text-white"
+                                className="bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white border border-blue-600/30"
                             >
                                 Edit Balance
                             </Button>
@@ -315,6 +333,11 @@ const AdminPanel: React.FC = () => {
                       </td>
                     </tr>
                   ))}
+                  {users.length === 0 && !isRefreshing && (
+                      <tr>
+                          <td colSpan={7} className="px-6 py-10 text-center text-gray-500">No users found in database.</td>
+                      </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -324,7 +347,7 @@ const AdminPanel: React.FC = () => {
         {activeTab === 'transactions' && (
           <div>
             <div className="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4">
-                <h3 className="text-xl font-semibold">Transaction History</h3>
+                <h3 className="text-xl font-semibold">Transaction Management</h3>
                 <div className="relative w-full sm:w-64 font-sans">
                     <MagnifyingGlassIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
                     <input 
@@ -351,7 +374,7 @@ const AdminPanel: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-gray-800">
                   {filteredTransactions.map((t: Transaction) => (
-                    <tr key={t.id}>
+                    <tr key={t.id} className="hover:bg-white/[0.01]">
                       <td className="px-6 py-4 whitespace-nowrap text-xs sm:text-sm text-gray-500 font-sans tabular-nums">{new Date(t.date).toLocaleString()}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-xs sm:text-sm text-gray-300">
                           <div className="flex flex-col">
@@ -360,11 +383,11 @@ const AdminPanel: React.FC = () => {
                           </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-xs sm:text-sm text-white">
-                          <span className={`px-2 py-1 rounded text-xs font-bold ${t.type === 'DEPOSIT' ? 'bg-blue-500/20 text-blue-400' : 'bg-orange-500/20 text-orange-400'}`}>
+                          <span className={`px-2 py-1 rounded text-[10px] font-bold tracking-wider ${t.type === 'DEPOSIT' ? 'bg-blue-500/20 text-blue-400' : 'bg-orange-500/20 text-orange-400'}`}>
                              {t.type}
                           </span>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-xs sm:text-sm text-white font-sans tabular-nums">Rp {t.amount.toLocaleString('id-ID')}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-xs sm:text-sm text-white font-sans tabular-nums font-bold">Rp {t.amount.toLocaleString('id-ID')}</td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusClass(t.status)}`}>
                           {t.status}
@@ -373,7 +396,7 @@ const AdminPanel: React.FC = () => {
                       <td className="px-6 py-4 whitespace-nowrap text-left text-xs sm:text-sm font-medium">
                         {t.type !== 'TRANSFER' ? (
                           <select
-                            className="bg-[#1E2329] border border-gray-600 text-white text-xs rounded p-1 focus:border-primary focus:outline-none cursor-pointer"
+                            className="bg-[#1E2329] border border-gray-600 text-white text-xs rounded p-1.5 focus:border-primary focus:outline-none cursor-pointer"
                             value={t.status}
                             onChange={(e) => handleStatusChange(t, e.target.value)}
                           >
@@ -384,11 +407,16 @@ const AdminPanel: React.FC = () => {
                               {t.type === 'WITHDRAWAL' && <option value={TransactionStatus.FAILED}>FAILED</option>}
                           </select>
                         ) : (
-                          <span className="text-gray-500">Auto</span>
+                          <span className="text-gray-500 italic">Auto-Success</span>
                         )}
                       </td>
                     </tr>
                   ))}
+                  {filteredTransactions.length === 0 && (
+                      <tr>
+                          <td colSpan={6} className="px-6 py-10 text-center text-gray-500">No transactions match your search.</td>
+                      </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -397,10 +425,10 @@ const AdminPanel: React.FC = () => {
 
         {activeTab === 'settings' && (
           <div>
-            <h3 className="text-xl font-semibold mb-4">Company Bank Information for Deposits</h3>
+            <h3 className="text-xl font-semibold mb-4 text-white">Company Bank Information for Deposits</h3>
             <div className="space-y-6">
                 {bankList.map((bank, index) => (
-                    <div key={index} className="bg-darkblue p-4 rounded-md border border-gray-700 relative">
+                    <div key={index} className="bg-darkblue p-4 rounded-md border border-gray-700 relative group">
                         <h4 className="font-semibold text-lg mb-4 text-white">Bank Account #{index + 1}</h4>
                         <Input
                             id={`adminBankName-${index}`}
@@ -429,17 +457,17 @@ const AdminPanel: React.FC = () => {
                             onChange={(e) => handleBankChange(index, 'accountHolderName', e.target.value)}
                             className="mb-4"
                         />
-                        <Button onClick={() => removeBank(index)} variant="danger" size="sm" className="absolute top-4 right-4 !p-2">
+                        <Button onClick={() => removeBank(index)} variant="danger" size="sm" className="absolute top-4 right-4 !p-2 opacity-50 group-hover:opacity-100 transition-opacity">
                           <TrashIcon className="h-4 w-4" />
                         </Button>
                     </div>
                 ))}
             </div>
-            <div className="mt-6 flex justify-between items-center">
+            <div className="mt-8 flex flex-col sm:flex-row justify-between items-center gap-4 border-t border-gray-700 pt-6">
               <Button onClick={addBank} variant="secondary" size="md">
                   <PlusIcon className="h-5 w-5 mr-2" /> Add New Bank Account
               </Button>
-              <Button onClick={handleUpdateBankInfo} variant="primary" size="lg">
+              <Button onClick={handleUpdateBankInfo} variant="primary" size="lg" className="shadow-lg shadow-primary/20">
                   Save All Changes
               </Button>
             </div>
@@ -449,21 +477,21 @@ const AdminPanel: React.FC = () => {
 
       {/* Create User Modal */}
       {isCreateModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
               <div className="bg-darkblue2 border border-gray-700 rounded-lg shadow-2xl w-full max-w-lg overflow-hidden animate-fade-in font-sans">
                 <div className="bg-darkblue p-4 border-b border-gray-700 flex justify-between items-center">
-                    <h3 className="text-white text-lg font-semibold flex items-center">
+                    <h3 className="text-white text-lg font-semibold flex items-center uppercase tracking-wider">
                         <UserPlusIcon className="w-5 h-5 mr-2 text-primary" />
                         Create New User
                     </h3>
-                    <button onClick={() => setIsCreateModalOpen(false)} className="text-gray-400 hover:text-white">
+                    <button onClick={() => setIsCreateModalOpen(false)} className="text-gray-400 hover:text-white transition-colors">
                         <XMarkIcon className="w-6 h-6" />
                     </button>
                 </div>
                 
-                <form onSubmit={handleCreateSubmit} className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+                <form onSubmit={handleCreateSubmit} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
                     {createError && (
-                        <div className="bg-danger/20 text-danger p-3 rounded-md text-sm">
+                        <div className="bg-danger/20 text-danger p-3 rounded-md text-sm border border-danger/30">
                             {createError}
                         </div>
                     )}
@@ -514,35 +542,36 @@ const AdminPanel: React.FC = () => {
                         icon={<CurrencyDollarIcon />}
                         value={createData.balance}
                         onChange={(e) => setCreateData({...createData, balance: e.target.value})}
+                        className="font-sans"
                     />
 
-                    <div className="flex space-x-6 pt-2">
-                        <label className="flex items-center space-x-2 cursor-pointer">
+                    <div className="flex flex-col space-y-3 pt-2">
+                        <label className="flex items-center space-x-3 cursor-pointer group">
                             <input 
                                 type="checkbox"
                                 checked={createData.isAdmin}
                                 onChange={(e) => setCreateData({...createData, isAdmin: e.target.checked})}
-                                className="w-4 h-4 bg-darkblue border-gray-700 rounded text-primary"
+                                className="w-5 h-5 bg-darkblue border-gray-700 rounded text-primary focus:ring-0"
                             />
-                            <span className="text-sm text-gray-300">Make Administrator</span>
+                            <span className="text-sm text-gray-300 group-hover:text-white transition-colors">Make Administrator</span>
                         </label>
-                        <label className="flex items-center space-x-2 cursor-pointer">
+                        <label className="flex items-center space-x-3 cursor-pointer group">
                             <input 
                                 type="checkbox"
                                 checked={createData.isVerified}
                                 onChange={(e) => setCreateData({...createData, isVerified: e.target.checked})}
-                                className="w-4 h-4 bg-darkblue border-gray-700 rounded text-primary"
+                                className="w-5 h-5 bg-darkblue border-gray-700 rounded text-primary focus:ring-0"
                             />
-                            <span className="text-sm text-gray-300">Auto-Verify Account</span>
+                            <span className="text-sm text-gray-300 group-hover:text-white transition-colors">Auto-Verify Account</span>
                         </label>
                     </div>
 
                     <div className="mt-8 flex space-x-3 pt-4 border-t border-gray-700">
-                        <Button type="button" variant="secondary" fullWidth onClick={() => setIsCreateModalOpen(false)}>
+                        <Button type="button" variant="ghost" fullWidth onClick={() => setIsCreateModalOpen(false)} disabled={createLoading}>
                             Cancel
                         </Button>
-                        <Button type="submit" variant="primary" fullWidth>
-                            Create Account
+                        <Button type="submit" variant="primary" fullWidth isLoading={createLoading} disabled={createLoading}>
+                            Save & Create
                         </Button>
                     </div>
                 </form>
@@ -552,12 +581,12 @@ const AdminPanel: React.FC = () => {
 
       {/* Balance Edit Modal */}
       {isBalanceModalOpen && selectedUserForBalance && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
             <div className="bg-darkblue2 border border-gray-700 rounded-lg shadow-2xl w-full max-w-md overflow-hidden animate-fade-in font-sans">
                 <div className="bg-darkblue p-4 border-b border-gray-700 flex justify-between items-center">
-                    <h3 className="text-white text-lg font-semibold flex items-center">
+                    <h3 className="text-white text-lg font-semibold flex items-center uppercase tracking-widest">
                         <CurrencyDollarIcon className="w-5 h-5 mr-2 text-primary" />
-                        Edit Balance
+                        Edit User Balance
                     </h3>
                     <button onClick={() => setIsBalanceModalOpen(false)} className="text-gray-400 hover:text-white">
                         <XMarkIcon className="w-6 h-6" />
@@ -565,21 +594,22 @@ const AdminPanel: React.FC = () => {
                 </div>
                 
                 <form onSubmit={handleBalanceSubmit} className="p-6">
-                    <div className="mb-4">
-                        <p className="text-sm text-gray-400 mb-1">Target User:</p>
-                        <p className="text-white font-medium text-lg">{selectedUserForBalance.fullName} <span className="text-gray-500 text-sm">({selectedUserForBalance.email})</span></p>
+                    <div className="mb-6 bg-darkblue/50 p-4 rounded-lg border border-gray-800">
+                        <p className="text-xs text-gray-500 mb-1 uppercase tracking-widest font-bold">Target User</p>
+                        <p className="text-white font-medium text-lg">{selectedUserForBalance.fullName}</p>
+                        <p className="text-gray-400 text-sm">{selectedUserForBalance.email}</p>
                     </div>
                     
-                    <div className="mb-6">
-                         <p className="text-sm text-gray-400 mb-1">Current Balance:</p>
-                         <p className="text-2xl font-sans font-bold text-white">Rp {selectedUserForBalance.balance.toLocaleString('id-ID')}</p>
+                    <div className="mb-8">
+                         <p className="text-xs text-gray-500 mb-1 uppercase tracking-widest font-bold">Current Balance</p>
+                         <p className="text-3xl font-sans font-black text-white">Rp {selectedUserForBalance.balance.toLocaleString('id-ID')}</p>
                     </div>
 
-                    <div className="space-y-4">
+                    <div className="space-y-6">
                         <div>
-                            <label className="block text-sm text-gray-400 mb-2 font-sans">Operation</label>
+                            <label className="block text-xs text-gray-500 mb-3 uppercase tracking-widest font-bold">Select Operation</label>
                             <div className="flex space-x-4">
-                                <label className={`flex-1 cursor-pointer border rounded-lg p-3 flex items-center justify-center transition-colors ${balanceOperation === 'add' ? 'bg-primary/20 border-primary text-white' : 'border-gray-700 text-gray-400 hover:bg-gray-800'}`}>
+                                <label className={`flex-1 cursor-pointer border rounded-xl p-3 flex flex-col items-center justify-center transition-all ${balanceOperation === 'add' ? 'bg-primary/20 border-primary text-white shadow-lg shadow-primary/10 scale-105' : 'border-gray-700 text-gray-500 hover:bg-gray-800'}`}>
                                     <input 
                                         type="radio" 
                                         name="operation" 
@@ -588,10 +618,10 @@ const AdminPanel: React.FC = () => {
                                         onChange={() => setBalanceOperation('add')}
                                         className="hidden" 
                                     />
-                                    <PlusIcon className="w-4 h-4 mr-2" />
-                                    Add Amount
+                                    <PlusIcon className="w-6 h-6 mb-1" />
+                                    <span className="text-xs font-bold uppercase tracking-wide">Add/Deduct</span>
                                 </label>
-                                <label className={`flex-1 cursor-pointer border rounded-lg p-3 flex items-center justify-center transition-colors ${balanceOperation === 'set' ? 'bg-warning/20 border-warning text-white' : 'border-gray-700 text-gray-400 hover:bg-gray-800'}`}>
+                                <label className={`flex-1 cursor-pointer border rounded-xl p-3 flex flex-col items-center justify-center transition-all ${balanceOperation === 'set' ? 'bg-warning/20 border-warning text-white shadow-lg shadow-warning/10 scale-105' : 'border-gray-700 text-gray-500 hover:bg-gray-800'}`}>
                                     <input 
                                         type="radio" 
                                         name="operation" 
@@ -600,28 +630,29 @@ const AdminPanel: React.FC = () => {
                                         onChange={() => setBalanceOperation('set')}
                                         className="hidden" 
                                     />
-                                    <BanknotesIcon className="w-4 h-4 mr-2" />
-                                    Set Total
+                                    <BanknotesIcon className="w-6 h-6 mb-1" />
+                                    <span className="text-xs font-bold uppercase tracking-wide">Set Absolute</span>
                                 </label>
                             </div>
                         </div>
 
                         <Input 
                             id="adminBalanceInput"
-                            label={balanceOperation === 'add' ? "Amount to Add (Rp)" : "New Total Balance (Rp)"}
+                            label={balanceOperation === 'add' ? "Amount (Negative for deduction)" : "New Absolute Total"}
                             type="number"
                             placeholder="0"
                             value={balanceAmount}
                             onChange={(e) => setBalanceAmount(e.target.value)}
                             icon={<CurrencyDollarIcon />}
+                            className="font-sans"
                         />
                     </div>
 
-                    <div className="mt-8 flex space-x-3">
-                        <Button type="button" variant="secondary" fullWidth onClick={() => setIsBalanceModalOpen(false)}>
+                    <div className="mt-10 flex space-x-3">
+                        <Button type="button" variant="ghost" fullWidth onClick={() => setIsBalanceModalOpen(false)}>
                             Cancel
                         </Button>
-                        <Button type="submit" variant="primary" fullWidth>
+                        <Button type="submit" variant="primary" fullWidth className="shadow-lg shadow-primary/20">
                             Confirm Update
                         </Button>
                     </div>

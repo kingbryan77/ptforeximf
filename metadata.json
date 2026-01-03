@@ -1,0 +1,5 @@
+{
+  "name": "FOREXimf Pro Broker - Cloud Edition",
+  "description": "Professional broker trading platform integrated with Supabase Cloud for real-time authentication and database persistence. Features include member area, admin panel, and live balance synchronization.",
+  "requestFramePermissions": []
+}
